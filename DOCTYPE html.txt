@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Maze Game</title>
+<style>
+  body { margin: 0; overflow: hidden; }
+  canvas { display: block; background: #eee; }
+  #ui { position: absolute; top: 10px; left: 10px; font-family: sans-serif; }
+  #leaderboard { position: absolute; top: 10px; right: 10px; font-family: sans-serif; background: rgba(255,255,255,0.8); padding: 5px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<div id="ui"></div>
+<div id="leaderboard"><b>Fastest AI Times:</b><ol id="aiTimes"></ol></div>
+<canvas id="gameCanvas" width="600" height="600"></canvas>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const ui = document.getElementById('ui');
+const leaderboard = document.getElementById('aiTimes');
+
+let startTime = Date.now();
+let timerInterval;
+let aiTimes = [];
+
+const maze = [
+  [0,0,0,0,0,0,0,0,0,0],
+  [0,1,1,1,0,1,1,1,1,0],
+  [0,1,0,1,0,1,0,0,1,0],
+  [0,1,0,1,1,1,0,1,1,0],
+  [0,1,0,0,0,1,0,1,0,0],
+  [0,1,1,1,0,1,1,1,0,0],
+  [0,0,0,1,0,0,0,1,0,0],
+  [0,1,1,1,1,1,0,1,1,0],
+  [0,0,0,0,0,0,0,0,0,0],
+];
+
+const cellSize = 60;
+let player = {x:1, y:1, color:'blue'};
+let goal = {x:8, y:7};
+
+function drawMaze() {
+  for(let y=0;y<maze.length;y++){
+    for(let x=0;x<maze[y].length;x++){
+      ctx.fillStyle = maze[y][x]===0 ? 'black':'white';
+      ctx.fillRect(x*cellSize,y*cellSize,cellSize,cellSize);
+      ctx.strokeRect(x*cellSize,y*cellSize,cellSize,cellSize);
+    }
+  }
+  // Draw goal
+  ctx.fillStyle='green';
+  ctx.fillRect(goal.x*cellSize, goal.y*cellSize, cellSize, cellSize);
+}
+
+function drawPlayer(p) {
+  ctx.fillStyle = p.color;
+  ctx.fillRect(p.x*cellSize+10, p.y*cellSize+10, cellSize-20, cellSize-20);
+}
+
+function updateTimer() {
+  const seconds = ((Date.now()-startTime)/1000).toFixed(2);
+  ui.innerHTML = `Time: ${seconds}s`;
+}
+
+function movePlayer(dir) {
+  let nx = player.x;
+  let ny = player.y;
+  if(dir==='up') ny--;
+  if(dir==='down') ny++;
+  if(dir==='left') nx--;
+  if(dir==='right') nx++;
+  if(maze[ny][nx]===1) {
+    player.x = nx;
+    player.y = ny;
+  }
+  if(player.x===goal.x && player.y===goal.y){
+    clearInterval(timerInterval);
+    alert(`You reached the goal in ${((Date.now()-startTime)/1000).toFixed(2)}s!`);
+  }
+}
+
+// Simple AI: random moves to reach goal
+let aiPlayer = {x:1,y:1,color:'red'};
+function moveAI(){
+  const dirs = ['up','down','left','right'];
+  let dir = dirs[Math.floor(Math.random()*dirs.length)];
+  let nx = aiPlayer.x;
+  let ny = aiPlayer.y;
+  if(dir==='up') ny--;
+  if(dir==='down') ny++;
+  if(dir==='left') nx--;
+  if(dir==='right') nx++;
+  if(maze[ny][nx]===1){
+    aiPlayer.x = nx;
+    aiPlayer.y = ny;
+  }
+  if(aiPlayer.x===goal.x && aiPlayer.y===goal.y){
+    let aiTime = ((Date.now()-startTime)/1000).toFixed(2);
+    aiTimes.push(aiTime);
+    aiTimes.sort((a,b)=>a-b);
+    if(aiTimes.length>5) aiTimes.pop();
+    renderLeaderboard();
+    aiPlayer.x=1; aiPlayer.y=1;
+    startTime = Date.now();
+  }
+}
+
+function renderLeaderboard(){
+  leaderboard.innerHTML = '';
+  for(let t of aiTimes){
+    let li = document.createElement('li');
+    li.textContent = t+'s';
+    leaderboard.appendChild(li);
+  }
+}
+
+// Keyboard controls
+document.addEventListener('keydown',(e)=>{
+  if(e.key==='ArrowUp') movePlayer('up');
+  if(e.key==='ArrowDown') movePlayer('down');
+  if(e.key==='ArrowLeft') movePlayer('left');
+  if(e.key==='ArrowRight') movePlayer('right');
+});
+
+function gameLoop(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawMaze();
+  drawPlayer(player);
+  drawPlayer(aiPlayer);
+  updateTimer();
+  moveAI();
+  requestAnimationFrame(gameLoop);
+}
+
+startTime = Date.now();
+timerInterval = setInterval(updateTimer, 100);
+gameLoop();
+</script>
+</body>
+</html>
