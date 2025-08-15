@@ -1,150 +1,144 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<title>AI Learning Game</title>
+<title>Optimized AI Game</title>
 <style>
-  canvas { border:1px solid black; background:#eee; display:block; margin: 20px auto; }
-  #ui { text-align:center; font-family:sans-serif; }
-  #leaderboard { margin-top:10px; }
+  canvas { background: #eee; display: block; margin: 0 auto; }
+  #ui { text-align: center; margin-top: 10px; font-family: sans-serif; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js"></script>
 </head>
 <body>
+
+<canvas id="gameCanvas" width="400" height="400"></canvas>
+
 <div id="ui">
   <div>Attempts: <span id="attempts">0</span></div>
-  <div>Timer: <span id="timer">0</span></div>
-  <div>Avg last 10: <span id="avg10">0</span></div>
-  <div id="leaderboard"><b>Leaderboard (fastest steps):</b><br></div>
+  <div>Average last 10: <span id="avg10">0</span></div>
+  <div>Leaderboard (fastest 5): <span id="leaderboard">-</span></div>
 </div>
-<canvas id="game" width="400" height="400"></canvas>
-<script>
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
 const gridSize = 20;
-const cols = canvas.width / gridSize;
 const rows = canvas.height / gridSize;
+const cols = canvas.width / gridSize;
 
 let attempts = 0;
 let last10 = [];
 let leaderboard = [];
+const maxLeaderboard = 5;
 
-const goal = {x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows)};
-let agent = {x:0, y:0};
+let qTable = {};
+const actions = ['up', 'down', 'left', 'right'];
+let alpha = 0.2;  // learning rate
+const gamma = 0.9;  // discount factor
+let epsilon = 1.0; // exploration
+const epsilonDecay = 0.995;
+const minEpsilon = 0.05;
 
-document.getElementById('leaderboard').innerHTML = `<b>Leaderboard (fastest steps):</b><br>`;
-document.getElementById('attempts').innerText = attempts;
+let player = {x:0, y:0};
+let goal = {x:0, y:0};
+let steps = 0;
 
-let timer = 0;
-let interval;
-
-// Deep Q-Network approximation
-const stateSize = 4; // agent x,y and goal x,y
-const actionSize = 4; // up, down, left, right
-let gamma = 0.95;
-let epsilon = 1.0;
-let epsilonMin = 0.01;
-let epsilonDecay = 0.995;
-
-const model = tf.sequential();
-model.add(tf.layers.dense({units: 24, inputShape:[stateSize], activation:'relu'}));
-model.add(tf.layers.dense({units:24, activation:'relu'}));
-model.add(tf.layers.dense({units:actionSize, activation:'linear'}));
-model.compile({optimizer: tf.train.adam(0.001), loss: 'meanSquaredError'});
-
-// Helper functions
 function resetGame() {
-    agent = {x:0, y:0};
-    goal.x = Math.floor(Math.random()*cols);
-    goal.y = Math.floor(Math.random()*rows);
-    timer = 0;
-    clearInterval(interval);
-    interval = setInterval(()=>{timer++; document.getElementById('timer').innerText = timer;},100);
+  player = {x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows)};
+  goal = {x: Math.floor(Math.random()*cols), y: Math.floor(Math.random()*rows)};
+  steps = 0;
 }
 
 function drawGame() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    // Goal
-    ctx.fillStyle='green';
-    ctx.fillRect(goal.x*gridSize, goal.y*gridSize, gridSize, gridSize);
-    // Agent
-    ctx.fillStyle='blue';
-    ctx.fillRect(agent.x*gridSize, agent.y*gridSize, gridSize, gridSize);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = 'blue';
+  ctx.fillRect(player.x*gridSize, player.y*gridSize, gridSize, gridSize);
+  ctx.fillStyle = 'green';
+  ctx.fillRect(goal.x*gridSize, goal.y*gridSize, gridSize, gridSize);
 }
 
 function getState() {
-    return [agent.x/cols, agent.y/rows, goal.x/cols, goal.y/rows];
+  // Use relative position for better generalization
+  let dx = goal.x - player.x;
+  let dy = goal.y - player.y;
+  return `${dx},${dy}`;
 }
 
 function chooseAction(state) {
-    if(Math.random() < epsilon){
-        return Math.floor(Math.random()*actionSize);
-    } else {
-        return tf.tidy(() => {
-            const input = tf.tensor2d([state]);
-            const pred = model.predict(input);
-            return pred.argMax(1).dataSync()[0];
-        });
-    }
+  if(Math.random() < epsilon || !(state in qTable)) {
+    return actions[Math.floor(Math.random()*actions.length)];
+  } else {
+    let qVals = qTable[state];
+    let maxQ = Math.max(...qVals);
+    let bestActions = [];
+    for(let i=0;i<qVals.length;i++) if(qVals[i]===maxQ) bestActions.push(actions[i]);
+    return bestActions[Math.floor(Math.random()*bestActions.length)];
+  }
 }
 
-function move(action){
-    if(action==0 && agent.y>0) agent.y--;
-    if(action==1 && agent.y<rows-1) agent.y++;
-    if(action==2 && agent.x>0) agent.x--;
-    if(action==3 && agent.x<cols-1) agent.x++;
+function doAction(action) {
+  if(action==='up' && player.y>0) player.y--;
+  if(action==='down' && player.y<rows-1) player.y++;
+  if(action==='left' && player.x>0) player.x--;
+  if(action==='right' && player.x<cols-1) player.x++;
 }
 
-async function trainStep(state, action, reward, nextState, done){
-    const target = tf.tidy(() => {
-        const target = model.predict(tf.tensor2d([state])).arraySync()[0];
-        let qUpdate = reward;
-        if(!done){
-            const nextQ = model.predict(tf.tensor2d([nextState])).max(1).dataSync()[0];
-            qUpdate = reward + gamma*nextQ;
-        }
-        target[action] = qUpdate;
-        return tf.tensor2d([target]);
-    });
-    await model.fit(tf.tensor2d([state]), target, {epochs:1, verbose:0});
-    target.dispose();
+function updateQ(prevState, action, reward, nextState) {
+  if(!(prevState in qTable)) qTable[prevState] = [0,0,0,0];
+  if(!(nextState in qTable)) qTable[nextState] = [0,0,0,0];
+  let idx = actions.indexOf(action);
+  let maxNext = Math.max(...qTable[nextState]);
+  qTable[prevState][idx] += alpha*(reward + gamma*maxNext - qTable[prevState][idx]);
 }
 
-async function runEpisode(){
-    resetGame();
-    let done=false;
-    let steps=0;
-    while(!done && steps<1000){
-        drawGame();
-        const state = getState();
-        const action = chooseAction(state);
-        move(action);
-        const nextState = getState();
-        let reward = (agent.x==goal.x && agent.y==goal.y)?100:-1;
-        done = (agent.x==goal.x && agent.y==goal.y);
-        await trainStep(state, action, reward, nextState, done);
-        steps++;
-    }
-    attempts++;
-    last10.push(steps);
-    if(last10.length>10) last10.shift();
-    document.getElementById('attempts').innerText = attempts;
-    const avg = Math.round(last10.reduce((a,b)=>a+b,0)/last10.length);
-    document.getElementById('avg10').innerText = avg;
+function computeReward(prev, curr) {
+  let prevDist = Math.abs(prev.x - goal.x) + Math.abs(prev.y - goal.y);
+  let currDist = Math.abs(curr.x - goal.x) + Math.abs(curr.y - goal.y);
+  if(curr.x===goal.x && curr.y===goal.y) return 10; // goal reached
+  return prevDist - currDist; // positive if closer
+}
 
-    leaderboard.push(steps);
-    leaderboard.sort((a,b)=>a-b);
-    if(leaderboard.length>5) leaderboard.pop();
-    document.getElementById('leaderboard').innerHTML = `<b>Leaderboard (fastest steps):</b><br>`+leaderboard.join('<br>');
+function aiStep() {
+  let state = getState();
+  let action = chooseAction(state);
+  let prevPos = {...player};
+  doAction(action);
+  steps++;
+  let reward = computeReward(prevPos, player);
+  let nextState = getState();
+  updateQ(state, action, reward, nextState);
+  drawGame();
+  if(player.x===goal.x && player.y===goal.y) {
+    finishEpisode();
+  } else {
+    requestAnimationFrame(aiStep);
+  }
+}
 
-    if(epsilon>epsilonMin) epsilon*=epsilonDecay;
+function finishEpisode() {
+  attempts++;
+  document.getElementById('attempts').textContent = attempts;
 
-    setTimeout(runEpisode, 100); // Next episode
+  last10.push(steps);
+  if(last10.length>10) last10.shift();
+  let avg = last10.reduce((a,b)=>a+b,0)/last10.length;
+  document.getElementById('avg10').textContent = avg.toFixed(2);
+
+  leaderboard.push(steps);
+  leaderboard.sort((a,b)=>a-b);
+  if(leaderboard.length>maxLeaderboard) leaderboard.pop();
+  document.getElementById('leaderboard').textContent = leaderboard.join(', ');
+
+  epsilon = Math.max(minEpsilon, epsilon*epsilonDecay);
+
+  setTimeout(resetGame, 200);
+  setTimeout(aiStep, 200);
 }
 
 // Start
-runEpisode();
+resetGame();
+drawGame();
+setTimeout(aiStep, 200);
+
 </script>
 </body>
 </html>
