@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Optimized AI Game</title>
+<title>Optimized AI Game with Replay</title>
 <style>
   canvas { background: #eee; display: block; margin: 0 auto; }
   #ui { text-align: center; margin-top: 10px; font-family: sans-serif; }
@@ -32,11 +32,18 @@ const maxLeaderboard = 5;
 
 let qTable = {};
 const actions = ['up', 'down', 'left', 'right'];
-let alpha = 0.2;  // learning rate
+
+let alpha = 0.5;  // starting learning rate
+const alphaDecay = 0.999;
+const minAlpha = 0.1;
 const gamma = 0.9;  // discount factor
-let epsilon = 1.0; // exploration
+
+let epsilon = 1.0;
 const epsilonDecay = 0.995;
 const minEpsilon = 0.05;
+
+const replayBuffer = [];
+const maxBuffer = 200;
 
 let player = {x:0, y:0};
 let goal = {x:0, y:0};
@@ -57,7 +64,6 @@ function drawGame() {
 }
 
 function getState() {
-  // Use relative position for better generalization
   let dx = goal.x - player.x;
   let dy = goal.y - player.y;
   return `${dx},${dy}`;
@@ -82,6 +88,13 @@ function doAction(action) {
   if(action==='right' && player.x<cols-1) player.x++;
 }
 
+function computeReward(prev, curr) {
+  let prevDist = Math.abs(prev.x - goal.x) + Math.abs(prev.y - goal.y);
+  let currDist = Math.abs(curr.x - goal.x) + Math.abs(curr.y - goal.y);
+  if(curr.x===goal.x && curr.y===goal.y) return 10;
+  return prevDist - currDist;
+}
+
 function updateQ(prevState, action, reward, nextState) {
   if(!(prevState in qTable)) qTable[prevState] = [0,0,0,0];
   if(!(nextState in qTable)) qTable[nextState] = [0,0,0,0];
@@ -90,11 +103,13 @@ function updateQ(prevState, action, reward, nextState) {
   qTable[prevState][idx] += alpha*(reward + gamma*maxNext - qTable[prevState][idx]);
 }
 
-function computeReward(prev, curr) {
-  let prevDist = Math.abs(prev.x - goal.x) + Math.abs(prev.y - goal.y);
-  let currDist = Math.abs(curr.x - goal.x) + Math.abs(curr.y - goal.y);
-  if(curr.x===goal.x && curr.y===goal.y) return 10; // goal reached
-  return prevDist - currDist; // positive if closer
+function replayExperience() {
+  // Update Q-table from random samples in buffer
+  for(let i=0;i<Math.min(20,replayBuffer.length);i++){
+    let idx = Math.floor(Math.random()*replayBuffer.length);
+    let exp = replayBuffer[idx];
+    updateQ(exp.state, exp.action, exp.reward, exp.nextState);
+  }
 }
 
 function aiStep() {
@@ -103,10 +118,18 @@ function aiStep() {
   let prevPos = {...player};
   doAction(action);
   steps++;
+
   let reward = computeReward(prevPos, player);
   let nextState = getState();
   updateQ(state, action, reward, nextState);
+
+  // Save experience for replay
+  replayBuffer.push({state, action, reward, nextState});
+  if(replayBuffer.length>maxBuffer) replayBuffer.shift();
+
+  replayExperience();
   drawGame();
+
   if(player.x===goal.x && player.y===goal.y) {
     finishEpisode();
   } else {
@@ -129,16 +152,16 @@ function finishEpisode() {
   document.getElementById('leaderboard').textContent = leaderboard.join(', ');
 
   epsilon = Math.max(minEpsilon, epsilon*epsilonDecay);
+  alpha = Math.max(minAlpha, alpha*alphaDecay);
 
-  setTimeout(resetGame, 200);
-  setTimeout(aiStep, 200);
+  setTimeout(resetGame, 100);
+  setTimeout(aiStep, 100);
 }
 
 // Start
 resetGame();
 drawGame();
-setTimeout(aiStep, 200);
-
+setTimeout(aiStep, 100);
 </script>
 </body>
 </html>
