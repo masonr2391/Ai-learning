@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AI Advanced Platformer</title>
+<title>Super Mario-style Platformer AI</title>
 <style>
   body { margin: 0; overflow: hidden; background: #222; color: #fff; font-family: sans-serif; }
-  canvas { background: #444; display: block; margin: 0 auto; }
+  canvas { display: block; margin: 0 auto; background: #333; }
   #ui { position: absolute; top: 10px; right: 10px; text-align: right; }
 </style>
 </head>
@@ -16,105 +16,106 @@
   <div>Last 10 Avg: <span id="avg">0.00</span>s</div>
 </div>
 <canvas id="game" width="800" height="400"></canvas>
+
 <script>
-// Canvas setup
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const width = canvas.width;
 const height = canvas.height;
 
-// Game settings
 const gravity = 0.5;
-const playerSize = 20;
-const groundLevel = height - 40;
 const tileSize = 40;
+const groundLevel = height - tileSize;
 
-// Obstacle types
-// 0 = empty, 1 = block, 2 = spike, 3 = trampoline, 4 = moving platform
+// Level with obstacles: 0 = empty, 1 = platform, 2 = spike
 const level = [
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-  [1,0,0,2,1,0,3,0,0,4,1,0,0,1,0,2,0,0,1,1]
+  [0,0,0,1,0,0,0,1,0,0,0,0,1,0,0],
+  [0,0,0,0,0,2,0,0,0,0,0,2,0,0,0],
+  [0,1,0,0,0,0,0,1,0,0,0,0,1,0,0],
 ];
 
-// AI settings
+// Game state
 let attempts = 0;
-const lastTimes = [];
+let lastTimes = [];
 let bestTime = Infinity;
 
-// Player/AI object
+// Player class
 class Player {
   constructor() { this.reset(); }
   reset() {
-    this.x = 20; this.y = groundLevel - playerSize;
-    this.vx = 0; this.vy = 0; this.onGround = true;
-    this.finished = false; this.startTime = Date.now();
-    this.jumpBias = 0; // AI learning bias
+    this.x = 20;
+    this.y = groundLevel - 20;
+    this.vx = 0;
+    this.vy = 0;
+    this.width = 20;
+    this.height = 20;
+    this.onGround = false;
+    this.finished = false;
+    this.startTime = Date.now();
   }
   update() {
     if (this.finished) return;
-    const actions = this.decide();
-    if (actions.jump && this.onGround) this.vy = -10;
-    if (actions.left) this.vx = -3;
-    else if (actions.right) this.vx = 3;
-    else this.vx = 0;
 
+    // Simple AI placeholder: move right constantly
+    this.vx = 2;
+
+    // Gravity
     this.vy += gravity;
     this.x += this.vx;
     this.y += this.vy;
-    this.onGround = false;
 
-    // Collision & obstacle effects
+    // Collision with ground
+    if (this.y + this.height >= groundLevel) {
+      this.y = groundLevel - this.height;
+      this.vy = 0;
+      this.onGround = true;
+    }
+
+    // Finish line
+    if (this.x >= width - tileSize) {
+      this.finished = true;
+      const timeTaken = (Date.now() - this.startTime) / 1000;
+      this.registerTime(timeTaken);
+    }
+
+    // Collision with obstacles (simplified)
     for (let row = 0; row < level.length; row++) {
       for (let col = 0; col < level[row].length; col++) {
         const type = level[row][col];
         if (type === 0) continue;
-        const px = col * tileSize;
-        const py = groundLevel - tileSize;
-        if (this.x + playerSize > px && this.x < px + tileSize &&
-            this.y + playerSize > py && this.y < py + tileSize) {
-          if (type === 1) { // block
-            this.y = py - playerSize; this.vy = 0; this.onGround = true;
-          } else if (type === 2) { // spike
-            this.finished = true; this.registerTime(999); return;
-          } else if (type === 3) { // trampoline
-            if (this.vy > 0) this.vy = -15; this.onGround = false;
-          } else if (type === 4) { // moving platform
-            this.y = py - playerSize; this.vy = 0; this.onGround = true;
-            this.x += Math.sin(Date.now()/500)*2; // simple oscillation
+        const x = col * tileSize;
+        const y = groundLevel - tileSize;
+        if (this.x < x + tileSize && this.x + this.width > x &&
+            this.y < y + tileSize && this.y + this.height > y) {
+          if (type === 1) { // Platform
+            this.y = y - this.height;
+            this.vy = 0;
+            this.onGround = true;
+          } else if (type === 2) { // Spike
+            this.finished = true;
+            this.registerTime(Infinity);
           }
         }
       }
     }
-
-    if (this.y + playerSize > groundLevel) { this.y = groundLevel - playerSize; this.vy = 0; this.onGround = true; }
-
-    // Finish line
-    if (this.x >= width - playerSize) { this.finished = true; this.registerTime((Date.now() - this.startTime)/1000); }
   }
-  draw() { ctx.fillStyle = '#0f0'; ctx.fillRect(this.x,this.y,playerSize,playerSize); }
-  decide() {
-    const nextTileX = Math.floor((this.x + playerSize + 10)/tileSize);
-    const jumpChance = Math.min(Math.max(this.jumpBias,0),1);
-    const jump = Math.random() < jumpChance;
-    return {left:false,right:true,jump};
+  draw() {
+    ctx.fillStyle = '#0f0';
+    ctx.fillRect(this.x, this.y, this.width, this.height);
   }
   registerTime(timeTaken) {
-    lastTimes.push(timeTaken);
-    if (lastTimes.length>10) lastTimes.shift();
+    if (timeTaken !== Infinity) {
+      lastTimes.push(timeTaken);
+      if (lastTimes.length > 10) lastTimes.shift();
+      if (timeTaken < bestTime) bestTime = timeTaken;
+    }
     attempts++;
-    if (timeTaken<bestTime) bestTime=timeTaken;
-    this.jumpBias += (bestTime - timeTaken)*0.01; // simple learning
     updateUI(timeTaken);
-    setTimeout(()=>this.reset(),500);
+    setTimeout(() => this.reset(), 500);
   }
 }
 
-// Initialize player
-const player = new Player();
-
-// Draw platforms and obstacles
+// Draw level
 function drawLevel() {
   for (let row = 0; row < level.length; row++) {
     for (let col = 0; col < level[row].length; col++) {
@@ -122,11 +123,8 @@ function drawLevel() {
       if (type === 0) continue;
       const x = col * tileSize;
       const y = groundLevel - tileSize;
-      if (type === 1) ctx.fillStyle = '#888';
-      else if (type === 2) ctx.fillStyle = '#f00';
-      else if (type === 3) ctx.fillStyle = '#0ff';
-      else if (type === 4) ctx.fillStyle = '#ff0';
-      ctx.fillRect(x,y,tileSize,tileSize);
+      ctx.fillStyle = (type === 1) ? '#888' : '#f00';
+      ctx.fillRect(x, y, tileSize, tileSize);
     }
   }
   // Finish line
@@ -134,16 +132,23 @@ function drawLevel() {
   ctx.fillRect(width - tileSize, groundLevel - tileSize, tileSize, tileSize);
 }
 
-// Update UI
+// UI update
 function updateUI(lastTime) {
   document.getElementById('attempts').innerText = attempts;
-  document.getElementById('time').innerText = lastTime.toFixed(2);
-  const avg = lastTimes.reduce((a,b)=>a+b,0)/lastTimes.length;
+  document.getElementById('time').innerText = (lastTime === Infinity ? 'Failed' : lastTime.toFixed(2));
+  const avg = lastTimes.reduce((a,b)=>a+b,0)/lastTimes.length || 0;
   document.getElementById('avg').innerText = avg.toFixed(2);
 }
 
 // Game loop
-function loop() { ctx.clearRect(0,0,width,height); drawLevel(); player.update(); player.draw(); requestAnimationFrame(loop); }
+const player = new Player();
+function loop() {
+  ctx.clearRect(0, 0, width, height);
+  drawLevel();
+  player.update();
+  player.draw();
+  requestAnimationFrame(loop);
+}
 loop();
 </script>
 </body>
