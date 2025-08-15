@@ -1,18 +1,178 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Super Mario-style Platformer with DQN AI</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script src="game.js" defer></script>
+  <title>AI Platformer</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.9.0/dist/tf.min.js"></script>
+  <style>
+    canvas { background: #87ceeb; display:block; margin: auto; }
+    #ui { text-align: center; font-family: sans-serif; margin-top: 10px; }
+  </style>
 </head>
 <body>
-  <div id="ui">
-    <div>Time: <span id="time">0.00</span>s</div>
-    <div>Attempts: <span id="attempts">0</span></div>
-    <div>Last 10 Avg: <span id="avg">0.00</span>s</div>
-  </div>
   <canvas id="game" width="800" height="400"></canvas>
+  <div id="ui">
+    <p>Attempts: <span id="attempts">0</span></p>
+    <p>Average last 10 times: <span id="avgTime">0</span> s</p>
+    <p>Fastest times: <span id="fastTimes">---</span></p>
+  </div>
+  <script>
+    // Game setup
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const gravity = 0.8;
+
+    const player = { x: 50, y: 300, w: 30, h: 30, vy: 0, onGround: false };
+    const obstacles = [
+      {x: 200, y: 350, w: 50, h: 50},
+      {x: 400, y: 300, w: 50, h: 100},
+      {x: 600, y: 250, w: 50, h: 150}
+    ];
+    const goal = {x: 750, y: 300, w: 30, h: 30};
+
+    let attempts = 0;
+    let last10Times = [];
+    let fastTimes = [];
+
+    // AI setup
+    const stateSize = 5; // x, y, vx, distToNextObs, distToGoal
+    const actionSize = 3; // 0: stay, 1: move right, 2: jump
+    let epsilon = 1.0;
+    const epsilonDecay = 0.995;
+    const epsilonMin = 0.05;
+    const gamma = 0.95;
+    const learningRate = 0.001;
+    const memory = [];
+
+    const model = tf.sequential();
+    model.add(tf.layers.dense({inputShape:[stateSize], units:24, activation:'relu'}));
+    model.add(tf.layers.dense({units:24, activation:'relu'}));
+    model.add(tf.layers.dense({units:actionSize, activation:'linear'}));
+    const optimizer = tf.train.adam(learningRate);
+    model.compile({optimizer, loss:'meanSquaredError'});
+
+    function getState() {
+      // distance to next obstacle
+      let nextObs = obstacles.find(o => o.x + o.w > player.x) || {x:goal.x, y:0};
+      let distObs = nextObs.x - player.x;
+      let distGoal = goal.x - player.x;
+      return [player.x/800, player.y/400, player.vy/10, distObs/800, distGoal/800];
+    }
+
+    async function act(state) {
+      if(Math.random() < epsilon) return Math.floor(Math.random()*actionSize);
+      const tfState = tf.tensor2d([state]);
+      const qvals = model.predict(tfState);
+      const action = qvals.argMax(1).dataSync()[0];
+      tfState.dispose(); qvals.dispose();
+      return action;
+    }
+
+    function remember(s,a,r,sNext,done) {
+      memory.push({s,a,r,sNext,done});
+      if(memory.length>2000) memory.shift();
+    }
+
+    async function replay(batchSize=32) {
+      const sample = memory.length<batchSize ? memory : tf.util.shuffle(memory).slice(0,batchSize);
+      for(const m of sample){
+        const target = m.r + (m.done ? 0 : gamma * model.predict(tf.tensor2d([m.sNext])).max().dataSync()[0]);
+        const targetF = model.predict(tf.tensor2d([m.s])).dataSync();
+        targetF[m.a] = target;
+        const xs = tf.tensor2d([m.s]);
+        const ys = tf.tensor2d([targetF]);
+        await model.fit(xs, ys, {epochs:1, verbose:0});
+        xs.dispose(); ys.dispose();
+      }
+      if(epsilon>epsilonMin) epsilon*=epsilonDecay;
+    }
+
+    let startTime = 0;
+    let gameOver = false;
+
+    async function resetGame() {
+      player.x = 50; player.y = 300; player.vy=0; player.onGround=false;
+      startTime = performance.now();
+      gameOver = false;
+    }
+
+    function draw() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle='green'; ctx.fillRect(player.x,player.y,player.w,player.h);
+      ctx.fillStyle='brown';
+      obstacles.forEach(o=>ctx.fillRect(o.x,o.y,o.w,o.h));
+      ctx.fillStyle='gold'; ctx.fillRect(goal.x,goal.y,goal.w,goal.h);
+    }
+
+    function checkCollision(a,b){
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    async function gameLoop() {
+      if(gameOver) return;
+
+      // AI action
+      const state = getState();
+      const action = await act(state);
+      if(action===1) player.x += 5;
+      if(action===2 && player.onGround) player.vy = -12;
+
+      // physics
+      player.vy += gravity;
+      player.y += player.vy;
+      player.onGround = false;
+      obstacles.forEach(o=>{
+        if(checkCollision(player,o) && player.vy>=0){
+          player.y = o.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      });
+      if(player.y + player.h > canvas.height){
+        player.y = canvas.height - player.h; player.vy=0; player.onGround=true;
+      }
+
+      draw();
+
+      // check goal
+      if(checkCollision(player,goal)){
+        gameOver=true;
+        const timeTaken = ((performance.now()-startTime)/1000).toFixed(2);
+        attempts++;
+        last10Times.push(parseFloat(timeTaken));
+        if(last10Times.length>10) last10Times.shift();
+        fastTimes.push(timeTaken);
+        fastTimes.sort((a,b)=>a-b); if(fastTimes.length>5) fastTimes.pop();
+        document.getElementById('attempts').innerText = attempts;
+        document.getElementById('avgTime').innerText = (last10Times.reduce((a,b)=>a+b,0)/last10Times.length).toFixed(2);
+        document.getElementById('fastTimes').innerText = fastTimes.join(', ');
+        // reward and train
+        const reward = 100 - parseFloat(timeTaken);
+        const nextState = getState();
+        remember(state, action, reward, nextState, true);
+        await replay();
+        resetGame();
+        requestAnimationFrame(gameLoop);
+        return;
+      }
+
+      // negative reward if hits bottom
+      if(player.y + player.h >= canvas.height){
+        const reward = -10;
+        const nextState = getState();
+        remember(state, action, reward, nextState, true);
+        await replay();
+        resetGame();
+      } else {
+        const reward = 0.1; // small positive reward for moving forward
+        const nextState = getState();
+        remember(state, action, reward, nextState, false);
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    resetGame();
+    gameLoop();
+  </script>
 </body>
 </html>
